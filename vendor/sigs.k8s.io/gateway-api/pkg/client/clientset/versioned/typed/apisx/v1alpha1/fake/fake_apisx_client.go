@@ -28,10 +28,6 @@ type FakeExperimentalV1alpha1 struct {
 	*testing.Fake
 }
 
-func (c *FakeExperimentalV1alpha1) XBackends(namespace string) v1alpha1.XBackendInterface {
-	return newFakeXBackends(c, namespace)
-}
-
 func (c *FakeExperimentalV1alpha1) XBackendTrafficPolicies(namespace string) v1alpha1.XBackendTrafficPolicyInterface {
 	return newFakeXBackendTrafficPolicies(c, namespace)
 }

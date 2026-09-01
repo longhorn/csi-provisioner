@@ -23,7 +23,7 @@ type FilterFunc func(*Info) (skip, stop bool)
 // "/foo" and "/foo/bar", and discards "/foobar".
 func PrefixFilter(prefix string) FilterFunc {
 	return func(m *Info) (bool, bool) {
-		skip := prefix != "/" && !strings.HasPrefix(m.Mountpoint+"/", prefix+"/")
+		skip := !strings.HasPrefix(m.Mountpoint+"/", prefix+"/")
 		return skip, false
 	}
 }
@@ -40,16 +40,12 @@ func SingleEntryFilter(mp string) FilterFunc {
 
 // ParentsFilter returns all entries whose mount points
 // can be parents of a path specified, discarding others.
-// The path must be absolute, have all symlinks resolved,
-// and cleaned (i.e. no extra slashes or dots).
 //
 // For example, given /var/lib/docker/something, entries
-// like /var/lib/docker, /var and / are returned, while
-// /var/lib/dock is discarded.
+// like /var/lib/docker, /var and / are returned.
 func ParentsFilter(path string) FilterFunc {
 	return func(m *Info) (bool, bool) {
-		mp := m.Mountpoint
-		skip := mp != "/" && mp != path && !strings.HasPrefix(path, mp+"/")
+		skip := !strings.HasPrefix(path, m.Mountpoint)
 		return skip, false
 	}
 }
