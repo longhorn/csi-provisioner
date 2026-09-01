@@ -40,7 +40,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	storageinformersv1 "k8s.io/client-go/informers/storage/v1"
-	storagev1typed "k8s.io/client-go/kubernetes/typed/storage/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/component-base/metrics"
@@ -60,7 +59,7 @@ const (
 //
 // The controller maintains a set of topology segments (= NodeSelector
 // pointers). Work items are a combination of such a pointer and a
-// storage class name. These keys are mapped to the
+// pointer to a storage class. These keys are mapped to the
 // corresponding CSIStorageCapacity object, if one exists.
 //
 // When processing a work item, the controller first checks whether
@@ -81,7 +80,7 @@ type Controller struct {
 
 	csiController    CSICapacityClient
 	driverName       string
-	storageClient    storagev1typed.CSIStorageCapacitiesGetter
+	clientFactory    CSIStorageCapacityFactory
 	queue            workqueue.TypedRateLimitingInterface[QueueKey]
 	owner            *metav1.OwnerReference
 	managedByID      string
@@ -114,8 +113,7 @@ func (w WorkItem) equals(capacity *storagev1.CSIStorageCapacity) bool {
 
 type QueueKey struct {
 	// item is for sync/create/update of a CSIStorageCapacity object.
-	// A non-empty storageClassName distinguishes these items from deletions.
-	item WorkItem
+	item *WorkItem
 	// capacity is for deleting an obsolete CSIStorageCapacity object.
 	capacity *storagev1.CSIStorageCapacity
 }
@@ -149,13 +147,25 @@ type CSICapacityClient interface {
 	GetCapacity(ctx context.Context, in *csi.GetCapacityRequest, opts ...grpc.CallOption) (*csi.GetCapacityResponse, error)
 }
 
+// CSIStorageCapacityInterface is a subset of the client-go interface for
+// v1.CSIStorageCapacity.
+type CSIStorageCapacityInterface interface {
+	Create(ctx context.Context, cSIStorageCapacity *storagev1.CSIStorageCapacity, opts metav1.CreateOptions) (*storagev1.CSIStorageCapacity, error)
+	Update(ctx context.Context, cSIStorageCapacity *storagev1.CSIStorageCapacity, opts metav1.UpdateOptions) (*storagev1.CSIStorageCapacity, error)
+	Delete(ctx context.Context, name string, opts metav1.DeleteOptions) error
+}
+
+// CSIStorageCapacityFactory corresponds to StorageV1().CSIStorageCapacities but returns
+// just what we need.
+type CSIStorageCapacityFactory func(namespace string) CSIStorageCapacityInterface
+
 // NewController creates a new controller for CSIStorageCapacity objects.
 // It implements metrics.StableCollector and thus can be registered in
 // a registry.
 func NewCentralCapacityController(
 	csiController CSICapacityClient,
 	driverName string,
-	storageClient storagev1typed.CSIStorageCapacitiesGetter,
+	clientFactory CSIStorageCapacityFactory,
 	queue workqueue.TypedRateLimitingInterface[QueueKey],
 	owner *metav1.OwnerReference,
 	managedByID string,
@@ -170,7 +180,7 @@ func NewCentralCapacityController(
 	c := &Controller{
 		csiController:    csiController,
 		driverName:       driverName,
-		storageClient:    storageClient,
+		clientFactory:    clientFactory,
 		queue:            queue,
 		owner:            owner,
 		managedByID:      managedByID,
@@ -425,7 +435,7 @@ func (c *Controller) refreshTopology(nodeAffinity v1.VolumeNodeAffinity) {
 		for item := range c.capacities {
 			if item.segment.Compare(segment) == 0 {
 				klog.V(5).Infof("Capacity Controller: skipping refresh: enqueuing %+v because of the topology", item)
-				c.queue.Add(QueueKey{item: item})
+				c.queue.Add(QueueKey{item: &item})
 			}
 		}
 	}
@@ -460,7 +470,7 @@ func (c *Controller) refreshSC(storageClassName string) {
 	for item := range c.capacities {
 		if item.storageClassName == storageClassName {
 			klog.V(5).Infof("Capacity Controller: enqueuing %+v because of the storage class", item)
-			c.queue.Add(QueueKey{item: item})
+			c.queue.Add(QueueKey{item: &item})
 		}
 	}
 }
@@ -481,7 +491,7 @@ func (c *Controller) addWorkItem(segment *topology.Segment, sc *storagev1.Storag
 	// ... and then tell our workers to update
 	// or create that capacity object.
 	klog.V(5).Infof("Capacity Controller: enqueuing %+v", item)
-	c.queue.Add(QueueKey{item: item})
+	c.queue.Add(QueueKey{item: &item})
 }
 
 // removeWorkItem ensures that the item gets removed from c.capacities. It
@@ -519,7 +529,7 @@ func (c *Controller) pollCapacities() {
 
 	for item := range c.capacities {
 		klog.V(5).Infof("Capacity Controller: enqueuing %+v for periodic update", item)
-		c.queue.Add(QueueKey{item: item})
+		c.queue.Add(QueueKey{item: &item})
 	}
 }
 
@@ -539,8 +549,8 @@ func (c *Controller) processNextWorkItem(ctx context.Context) bool {
 		defer c.queue.Done(obj)
 
 		switch {
-		case obj.item.storageClassName != "":
-			return c.syncCapacity(ctx, obj.item)
+		case obj.item != nil:
+			return c.syncCapacity(ctx, *obj.item)
 		case obj.capacity != nil:
 			return c.deleteCapacity(ctx, obj.capacity)
 		default:
@@ -635,7 +645,7 @@ func (c *Controller) syncCapacity(ctx context.Context, item WorkItem) error {
 		}
 		var err error
 		klog.V(5).Infof("Capacity Controller: creating new object for %+v, new capacity %v", item, quantity)
-		capacity, err = c.storageClient.CSIStorageCapacities(c.ownerNamespace).Create(ctx, capacity, metav1.CreateOptions{})
+		capacity, err = c.clientFactory(c.ownerNamespace).Create(ctx, capacity, metav1.CreateOptions{})
 		if err != nil {
 			return fmt.Errorf("create CSIStorageCapacity for %+v: %v", item, err)
 		}
@@ -659,7 +669,7 @@ func (c *Controller) syncCapacity(ctx context.Context, item WorkItem) error {
 		}
 		var err error
 		klog.V(5).Infof("Capacity Controller: updating %s for %+v, new capacity %v, new maximumVolumeSize %v", capacity.Name, item, quantity, maximumVolumeSize)
-		capacity, err = c.storageClient.CSIStorageCapacities(capacity.Namespace).Update(ctx, capacity, metav1.UpdateOptions{})
+		capacity, err = c.clientFactory(capacity.Namespace).Update(ctx, capacity, metav1.UpdateOptions{})
 		if err != nil {
 			return fmt.Errorf("update CSIStorageCapacity for %+v: %v", item, err)
 		}
@@ -674,7 +684,7 @@ func (c *Controller) syncCapacity(ctx context.Context, item WorkItem) error {
 // deleteCapacity ensures that the object is gone when done.
 func (c *Controller) deleteCapacity(ctx context.Context, capacity *storagev1.CSIStorageCapacity) error {
 	klog.V(5).Infof("Capacity Controller: removing CSIStorageCapacity %s", capacity.Name)
-	err := c.storageClient.CSIStorageCapacities(capacity.Namespace).Delete(ctx, capacity.Name, metav1.DeleteOptions{})
+	err := c.clientFactory(capacity.Namespace).Delete(ctx, capacity.Name, metav1.DeleteOptions{})
 	if err != nil && apierrs.IsNotFound(err) {
 		return nil
 	}
@@ -695,7 +705,7 @@ func (c *Controller) onCAddOrUpdate(_ context.Context, capacity *storagev1.CSISt
 			if capacity2 != nil && capacity2.UID == capacity.UID {
 				c.capacities[item] = nil
 				klog.V(5).Infof("Capacity Controller: CSIStorageCapacity %s owner was modified by someone, enqueueing %v for re-creation", capacity.Name, item)
-				c.queue.Add(QueueKey{item: item})
+				c.queue.Add(QueueKey{item: &item})
 			}
 		}
 		return
@@ -735,7 +745,7 @@ func (c *Controller) onCDelete(_ context.Context, capacity *storagev1.CSIStorage
 			// Re-create it...
 			klog.V(5).Infof("Capacity Controller: CSIStorageCapacity %s was removed by someone, enqueue %v for re-creation", capacity.Name, item)
 			c.capacities[item] = nil
-			c.queue.Add(QueueKey{item: item})
+			c.queue.Add(QueueKey{item: &item})
 			return
 		}
 	}
