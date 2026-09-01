@@ -84,13 +84,13 @@ func (cm *ControlMessage) Parse(b []byte) error {
 			continue
 		}
 		switch {
-		case ctlOpts[ctlTTL].name > 0 && typ == ctlOpts[ctlTTL].name && l >= ctlOpts[ctlTTL].length:
+		case typ == ctlOpts[ctlTTL].name && l >= ctlOpts[ctlTTL].length:
 			ctlOpts[ctlTTL].parse(cm, m.Data(l))
-		case ctlOpts[ctlDst].name > 0 && typ == ctlOpts[ctlDst].name && l >= ctlOpts[ctlDst].length:
+		case typ == ctlOpts[ctlDst].name && l >= ctlOpts[ctlDst].length:
 			ctlOpts[ctlDst].parse(cm, m.Data(l))
-		case ctlOpts[ctlInterface].name > 0 && typ == ctlOpts[ctlInterface].name && l >= ctlOpts[ctlInterface].length:
+		case typ == ctlOpts[ctlInterface].name && l >= ctlOpts[ctlInterface].length:
 			ctlOpts[ctlInterface].parse(cm, m.Data(l))
-		case ctlOpts[ctlPacketInfo].name > 0 && typ == ctlOpts[ctlPacketInfo].name && l >= ctlOpts[ctlPacketInfo].length:
+		case typ == ctlOpts[ctlPacketInfo].name && l >= ctlOpts[ctlPacketInfo].length:
 			ctlOpts[ctlPacketInfo].parse(cm, m.Data(l))
 		}
 	}

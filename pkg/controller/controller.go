@@ -266,9 +266,6 @@ type NodeDeployment struct {
 	BaseDelay time.Duration
 	// MaxDelay is the maximum for the initial wait time.
 	MaxDelay time.Duration
-	// VolumeLabels are added to each PV created by this instance. They allow
-	// watching only those PVs instead of all PVs in the cluster.
-	VolumeLabels map[string]string
 }
 
 type internalNodeDeployment struct {
@@ -999,13 +996,6 @@ func (p *csiProvisioner) Provision(ctx context.Context, options controller.Provi
 		metav1.SetMetaDataAnnotation(&pv.ObjectMeta, annModifyControllerSecretRefNamespace, result.provModifySecrets.namespace)
 	}
 
-	if p.nodeDeployment != nil && len(p.nodeDeployment.VolumeLabels) > 0 {
-		if pv.Labels == nil {
-			pv.Labels = map[string]string{}
-		}
-		maps.Copy(pv.Labels, p.nodeDeployment.VolumeLabels)
-	}
-
 	if options.StorageClass.ReclaimPolicy != nil {
 		pv.Spec.PersistentVolumeReclaimPolicy = *options.StorageClass.ReclaimPolicy
 	}
@@ -1051,10 +1041,9 @@ func (p *csiProvisioner) Provision(ctx context.Context, options controller.Provi
 	}
 
 	// Remove snapshot finalizer if this PVC was provisioned from a snapshot
-	if isSnapshotSourcePVC(claim) {
-		snapNamespace, snapName := snapshotNameFromPVC(claim)
-		if err := p.removeSnapshotFinalizer(ctx, snapNamespace, snapName); err != nil {
-			klog.Warningf("Failed to remove snapshot finalizer from %s/%s: %v", snapNamespace, snapName, err)
+	if claim.Spec.DataSource != nil && claim.Spec.DataSource.Kind == snapshotKind {
+		if err := p.removeSnapshotFinalizer(ctx, claim.Namespace, claim.Spec.DataSource.Name); err != nil {
+			klog.Warningf("Failed to remove snapshot finalizer from %s/%s: %v", claim.Namespace, claim.Spec.DataSource.Name, err)
 			// Don't fail provisioning if we can't remove the finalizer - it will be cleaned up later
 		}
 	}
@@ -1548,9 +1537,7 @@ func (p *csiProvisioner) canDeleteVolume(volume *v1.PersistentVolume) error {
 
 	for _, va := range vaList {
 		if va.Spec.Source.PersistentVolumeName != nil && *va.Spec.Source.PersistentVolumeName == volume.Name {
-			return &controller.VolumeInUseError{
-				Reason: fmt.Sprintf("persistentvolume %s is still attached to node %s, waiting for detach", volume.Name, va.Spec.NodeName),
-			}
+			return fmt.Errorf("persistentvolume %s is still attached to node %s", volume.Name, va.Spec.NodeName)
 		}
 	}
 

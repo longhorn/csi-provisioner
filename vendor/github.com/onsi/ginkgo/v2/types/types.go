@@ -282,17 +282,12 @@ func (report SpecReport) MarshalJSON() ([]byte, error) {
 		LeafNodeLocation                             CodeLocation
 		LeafNodeLabels                               []string
 		LeafNodeSemVerConstraints                    []string
-		LeafNodeComponentSemVerConstraints           map[string][]string
 		LeafNodeText                                 string
-		SpecPriority                                 int
-		IsSerial                                     bool
-		IsInOrderedContainer                         bool
 		State                                        SpecState
 		StartTime                                    time.Time
 		EndTime                                      time.Time
 		RunTime                                      time.Duration
 		ParallelProcess                              int
-		RunningInParallel                            bool
 		Failure                                      *Failure `json:",omitempty"`
 		NumAttempts                                  int
 		MaxFlakeAttempts                             int
@@ -313,17 +308,12 @@ func (report SpecReport) MarshalJSON() ([]byte, error) {
 		LeafNodeLocation:                             report.LeafNodeLocation,
 		LeafNodeLabels:                               report.LeafNodeLabels,
 		LeafNodeSemVerConstraints:                    report.LeafNodeSemVerConstraints,
-		LeafNodeComponentSemVerConstraints:           report.LeafNodeComponentSemVerConstraints,
 		LeafNodeText:                                 report.LeafNodeText,
-		SpecPriority:                                 report.SpecPriority,
 		State:                                        report.State,
-		IsSerial:                                     report.IsSerial,
-		IsInOrderedContainer:                         report.IsInOrderedContainer,
 		StartTime:                                    report.StartTime,
 		EndTime:                                      report.EndTime,
 		RunTime:                                      report.RunTime,
 		ParallelProcess:                              report.ParallelProcess,
-		RunningInParallel:                            report.RunningInParallel,
 		Failure:                                      nil,
 		ReportEntries:                                nil,
 		NumAttempts:                                  report.NumAttempts,
@@ -946,17 +936,11 @@ const (
 	NodeTypeCleanupAfterEach
 	NodeTypeCleanupAfterAll
 	NodeTypeCleanupAfterSuite
-
-	NodeTypeOnFailureInvalid
-	NodeTypeOnFailureEach
-	NodeTypeOnFailureAll
-	NodeTypeOnFailureSuite
 )
 
 var NodeTypesForContainerAndIt = NodeTypeContainer | NodeTypeIt
 var NodeTypesForSuiteLevelNodes = NodeTypeBeforeSuite | NodeTypeSynchronizedBeforeSuite | NodeTypeAfterSuite | NodeTypeSynchronizedAfterSuite | NodeTypeReportBeforeSuite | NodeTypeReportAfterSuite | NodeTypeCleanupAfterSuite
-var NodeTypesForOnFailure = NodeTypeOnFailureInvalid | NodeTypeOnFailureEach | NodeTypeOnFailureAll | NodeTypeOnFailureSuite
-var NodeTypesAllowedDuringCleanupInterrupt = NodeTypeAfterEach | NodeTypeJustAfterEach | NodeTypeAfterAll | NodeTypeAfterSuite | NodeTypeSynchronizedAfterSuite | NodeTypeCleanupAfterEach | NodeTypeCleanupAfterAll | NodeTypeCleanupAfterSuite | NodeTypeOnFailureEach | NodeTypeOnFailureAll | NodeTypeOnFailureSuite
+var NodeTypesAllowedDuringCleanupInterrupt = NodeTypeAfterEach | NodeTypeJustAfterEach | NodeTypeAfterAll | NodeTypeAfterSuite | NodeTypeSynchronizedAfterSuite | NodeTypeCleanupAfterEach | NodeTypeCleanupAfterAll | NodeTypeCleanupAfterSuite
 var NodeTypesAllowedDuringReportInterrupt = NodeTypeReportBeforeEach | NodeTypeReportAfterEach | NodeTypeReportBeforeSuite | NodeTypeReportAfterSuite
 
 var ntEnumSupport = NewEnumSupport(map[uint]string{
@@ -981,10 +965,6 @@ var ntEnumSupport = NewEnumSupport(map[uint]string{
 	uint(NodeTypeCleanupAfterEach):        "DeferCleanup (Each)",
 	uint(NodeTypeCleanupAfterAll):         "DeferCleanup (All)",
 	uint(NodeTypeCleanupAfterSuite):       "DeferCleanup (Suite)",
-	uint(NodeTypeOnFailureInvalid):        "DeferOnFailure",
-	uint(NodeTypeOnFailureEach):           "DeferOnFailure (Each)",
-	uint(NodeTypeOnFailureAll):            "DeferOnFailure (All)",
-	uint(NodeTypeOnFailureSuite):          "DeferOnFailure (Suite)",
 })
 
 func (nt NodeType) String() string {

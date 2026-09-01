@@ -5,6 +5,7 @@
 package ssh
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -43,7 +44,7 @@ type disconnectMsg struct {
 }
 
 func (d *disconnectMsg) Error() string {
-	return fmt.Sprintf("ssh: disconnect, reason %d: %q", d.Reason, d.Message)
+	return fmt.Sprintf("ssh: disconnect, reason %d: %s", d.Reason, d.Message)
 }
 
 // See RFC 4253, section 7.1.
@@ -180,7 +181,6 @@ type userAuthBannerMsg struct {
 	Message string `sshtype:"53"`
 	// unused, but required to allow message parsing
 	Language string
-	Rest     []byte `ssh:"rest"`
 }
 
 // See RFC 4256, section 3.2
@@ -619,7 +619,10 @@ func parseString(in []byte) (out, rest []byte, ok bool) {
 	return
 }
 
-var emptyNameList = []string{}
+var (
+	comma         = []byte{','}
+	emptyNameList = []string{}
+)
 
 func parseNameList(in []byte) (out []string, rest []byte, ok bool) {
 	contents, rest, ok := parseString(in)
@@ -630,7 +633,11 @@ func parseNameList(in []byte) (out []string, rest []byte, ok bool) {
 		out = emptyNameList
 		return
 	}
-	out = strings.Split(string(contents), ",")
+	parts := bytes.Split(contents, comma)
+	out = make([]string, len(parts))
+	for i, part := range parts {
+		out[i] = string(part)
+	}
 	return
 }
 

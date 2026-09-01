@@ -1,4 +1,5 @@
 //go:build freebsd || openbsd || darwin
+// +build freebsd openbsd darwin
 
 package mountinfo
 

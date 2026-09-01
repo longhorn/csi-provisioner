@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -31,8 +30,8 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/golang/mock/gomock"
 	"github.com/kubernetes-csi/csi-test/v5/utils"
-	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -880,7 +879,6 @@ type provisioningTestcase struct {
 	expectCreateVolDo         func(t *testing.T, ctx context.Context, req *csi.CreateVolumeRequest)
 	withExtraMetadata         bool
 	skipCreateVolume          bool
-	deploymentVolumeLabels    map[string]string
 	deploymentNode            string // fake distributed provisioning with this node as host
 	immediateBinding          bool   // enable immediate binding support for distributed provisioning
 	expectSelectedNode        string // a specific selected-node of the PVC in the apiserver after the test, same as before if empty
@@ -905,7 +903,6 @@ type provisioningFSTypeTestcase struct {
 type pvSpec struct {
 	Name                      string
 	Annotations               map[string]string
-	Labels                    map[string]string
 	ReclaimPolicy             v1.PersistentVolumeReclaimPolicy
 	AccessModes               []v1.PersistentVolumeAccessMode
 	MountOptions              []string
@@ -2142,51 +2139,6 @@ func provisionTestcases() (int64, map[string]provisioningTestcase) {
 			},
 			expectState: controller.ProvisioningFinished,
 		},
-		"distributed, right node selected, with volume labels": {
-			deploymentNode: "foo",
-			deploymentVolumeLabels: map[string]string{
-				"csi.storage.k8s.io/drivername": "test-driver",
-				"csi.storage.k8s.io/managed-by": "external-provisioner-foo",
-			},
-			volOpts: controller.ProvisionOptions{
-				SelectedNodeName: nodeFoo.Name,
-				StorageClass: &storagev1.StorageClass{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: fakeSCName,
-					},
-					ReclaimPolicy: &deletePolicy,
-					Parameters: map[string]string{
-						"fstype": "ext3",
-					},
-				},
-				PVName: "test-name",
-				PVC: func() *v1.PersistentVolumeClaim {
-					claim := createFakePVC(requestedBytes)
-					claim.Annotations[annSelectedNode] = nodeFoo.Name
-					return claim
-				}(),
-			},
-			expectedPVSpec: &pvSpec{
-				Name: "test-testi",
-				Labels: map[string]string{
-					"csi.storage.k8s.io/drivername": "test-driver",
-					"csi.storage.k8s.io/managed-by": "external-provisioner-foo",
-				},
-				ReclaimPolicy: v1.PersistentVolumeReclaimDelete,
-				Capacity: v1.ResourceList{
-					v1.ResourceName(v1.ResourceStorage): bytesToQuantity(requestedBytes),
-				},
-				CSIPVS: &v1.CSIPersistentVolumeSource{
-					Driver:       "test-driver",
-					VolumeHandle: "test-volume-id",
-					FSType:       "ext3",
-					VolumeAttributes: map[string]string{
-						"storage.kubernetes.io/csiProvisionerIdentity": "test-provisioner",
-					},
-				},
-			},
-			expectState: controller.ProvisioningFinished,
-		},
 		"distributed, no node selected": {
 			deploymentNode: "foo",
 			volOpts: controller.ProvisionOptions{
@@ -2831,7 +2783,6 @@ func runProvisionTest(t *testing.T, tc provisioningTestcase, requestedBytes int6
 			NodeName:         tc.deploymentNode,
 			ClaimInformer:    claimInformer,
 			ImmediateBinding: tc.immediateBinding,
-			VolumeLabels:     tc.deploymentVolumeLabels,
 		}
 	}
 
@@ -2886,10 +2837,6 @@ func runProvisionTest(t *testing.T, tc provisioningTestcase, requestedBytes int6
 
 			if tc.expectedPVSpec.Annotations != nil && !reflect.DeepEqual(pv.Annotations, tc.expectedPVSpec.Annotations) {
 				t.Errorf("expected PV annotations: %v, got: %v", tc.expectedPVSpec.Annotations, pv.Annotations)
-			}
-
-			if !reflect.DeepEqual(pv.Labels, tc.expectedPVSpec.Labels) {
-				t.Errorf("expected PV labels: %v, got: %v", tc.expectedPVSpec.Labels, pv.Labels)
 			}
 
 			if pv.Spec.PersistentVolumeReclaimPolicy != tc.expectedPVSpec.ReclaimPolicy {
@@ -4683,8 +4630,6 @@ func TestProvisionFromSnapshot(t *testing.T) {
 	doit := func(t *testing.T, tc testcase) {
 		var clientSet kubernetes.Interface = fakeclientset.NewSimpleClientset()
 		client := &fake.Clientset{}
-		// The last snapshot that the provisioner updated. Later gets return its finalizers.
-		var updatedSnapshot *crdv1.VolumeSnapshot
 
 		client.AddReactor("get", "volumesnapshots", func(action k8stesting.Action) (handled bool, ret runtime.Object, err error) {
 			namespace := "default"
@@ -4714,9 +4659,6 @@ func TestProvisionFromSnapshot(t *testing.T) {
 					snap.ObjectMeta.Finalizers = []string{"provisioner.storage.kubernetes.io/volumesnapshot-as-source-protection"}
 				}
 			}
-			if updatedSnapshot != nil {
-				snap.ObjectMeta.Finalizers = updatedSnapshot.Finalizers
-			}
 			return true, snap, nil
 		})
 
@@ -4732,10 +4674,6 @@ func TestProvisionFromSnapshot(t *testing.T) {
 			if !ok {
 				return false, nil, fmt.Errorf("expected VolumeSnapshot, got %T", updateAction.GetObject())
 			}
-			if updateAction.GetNamespace() != snap.Namespace || snap.Name != snapName {
-				return true, nil, fmt.Errorf("unexpected update of snapshot %s/%s in namespace %q", snap.Namespace, snap.Name, updateAction.GetNamespace())
-			}
-			updatedSnapshot = snap
 			return true, snap, nil
 		})
 
@@ -4860,27 +4798,6 @@ func TestProvisionFromSnapshot(t *testing.T) {
 						t.Errorf("expected PV: %v, got: %v", tc.expectedPVSpec.CSIPVS, pv.Spec.PersistentVolumeSource.CSI)
 					}
 				}
-			}
-		}
-
-		if !tc.expectErr && err == nil {
-			snapNamespace := tc.volOpts.PVC.Namespace
-			if tc.snapNamespace != "" {
-				snapNamespace = tc.snapNamespace
-			}
-			for _, action := range client.Actions() {
-				getAction, ok := action.(k8stesting.GetAction)
-				if ok && action.Matches("get", "volumesnapshots") &&
-					(getAction.GetNamespace() != snapNamespace || getAction.GetName() != snapName) {
-					t.Errorf("expected snapshot get of %s/%s, got %s/%s", snapNamespace, snapName, getAction.GetNamespace(), getAction.GetName())
-				}
-			}
-			snap, getErr := client.SnapshotV1().VolumeSnapshots(snapNamespace).Get(context.Background(), snapName, metav1.GetOptions{})
-			if getErr != nil {
-				t.Fatalf("failed to get snapshot: %v", getErr)
-			}
-			if checkFinalizer(snap, snapshotSourceProtectionFinalizer) {
-				t.Errorf("expected finalizer %s to be removed from the snapshot", snapshotSourceProtectionFinalizer)
 			}
 		}
 	}
@@ -5221,7 +5138,6 @@ type deleteTestcase struct {
 	expectedProvisionerSecret *expectedSecret
 	deploymentNode            string // fake distributed provisioning with this node as host
 	expectErr                 bool
-	expectInUseErr            bool
 }
 
 func getDefaultProvisinerSecrets() []runtime.Object {
@@ -5300,8 +5216,7 @@ func TestDelete(t *testing.T) {
 						},
 					},
 					ClaimRef: &v1.ObjectReference{
-						Namespace: "pvc-namespace",
-						Name:      "pvc-name",
+						Name: "sc-name",
 					},
 					StorageClassName: "sc-name",
 				},
@@ -5311,8 +5226,7 @@ func TestDelete(t *testing.T) {
 					Name: "sc-name",
 				},
 				Parameters: map[string]string{
-					prefixedProvisionerSecretNameKey:      "static-${pv.name}-${pvc.namespace}-${pvc.name}",
-					prefixedProvisionerSecretNamespaceKey: "${pvc.namespace}",
+					prefixedProvisionerSecretNameKey: "static-${pv.name}-${pvc.namespace}-${pvc.name}",
 				},
 			},
 			volumeAttachment: &storagev1.VolumeAttachment{
@@ -5329,8 +5243,7 @@ func TestDelete(t *testing.T) {
 					Attached: true,
 				},
 			},
-			expectErr:      true,
-			expectInUseErr: true,
+			expectErr: true,
 		},
 		"fail - delete when volumeattachment exists but not attached to node": {
 			persistentVolume: &v1.PersistentVolume{
@@ -5344,8 +5257,7 @@ func TestDelete(t *testing.T) {
 						},
 					},
 					ClaimRef: &v1.ObjectReference{
-						Namespace: "pvc-namespace",
-						Name:      "pvc-name",
+						Name: "sc-name",
 					},
 					StorageClassName: "sc-name",
 				},
@@ -5355,8 +5267,7 @@ func TestDelete(t *testing.T) {
 					Name: "sc-name",
 				},
 				Parameters: map[string]string{
-					prefixedProvisionerSecretNameKey:      "static-${pv.name}-${pvc.namespace}-${pvc.name}",
-					prefixedProvisionerSecretNamespaceKey: "${pvc.namespace}",
+					prefixedProvisionerSecretNameKey: "static-${pv.name}-${pvc.namespace}-${pvc.name}",
 				},
 			},
 			volumeAttachment: &storagev1.VolumeAttachment{
@@ -5373,8 +5284,7 @@ func TestDelete(t *testing.T) {
 					Attached: false,
 				},
 			},
-			expectErr:      true,
-			expectInUseErr: true,
+			expectErr: true,
 		},
 		"fail - delete when volumeattachment exists with deletionTimestamp set": {
 			persistentVolume: &v1.PersistentVolume{
@@ -5388,8 +5298,7 @@ func TestDelete(t *testing.T) {
 						},
 					},
 					ClaimRef: &v1.ObjectReference{
-						Namespace: "pvc-namespace",
-						Name:      "pvc-name",
+						Name: "sc-name",
 					},
 					StorageClassName: "sc-name",
 				},
@@ -5399,8 +5308,7 @@ func TestDelete(t *testing.T) {
 					Name: "sc-name",
 				},
 				Parameters: map[string]string{
-					prefixedProvisionerSecretNameKey:      "static-${pv.name}-${pvc.namespace}-${pvc.name}",
-					prefixedProvisionerSecretNamespaceKey: "${pvc.namespace}",
+					prefixedProvisionerSecretNameKey: "static-${pv.name}-${pvc.namespace}-${pvc.name}",
 				},
 			},
 			volumeAttachment: &storagev1.VolumeAttachment{
@@ -5415,8 +5323,7 @@ func TestDelete(t *testing.T) {
 					NodeName: "node",
 				},
 			},
-			expectErr:      true,
-			expectInUseErr: true,
+			expectErr: true,
 		},
 		"simple - valid case": {
 			persistentVolume: &v1.PersistentVolume{
@@ -5830,9 +5737,6 @@ func runDeleteTest(t *testing.T, k string, tc deleteTestcase) {
 	if tc.secrets != nil {
 		clientSetObjects = append(clientSetObjects, tc.secrets...)
 	}
-	if tc.volumeAttachment != nil {
-		clientSetObjects = append(clientSetObjects, tc.volumeAttachment)
-	}
 	clientSet = fakeclientset.NewSimpleClientset(clientSetObjects...)
 
 	informerFactory := informers.NewSharedInformerFactory(clientSet, 0)
@@ -5898,10 +5802,6 @@ func runDeleteTest(t *testing.T, k string, tc deleteTestcase) {
 	}
 	if !tc.expectErr && err != nil {
 		t.Errorf("test %q: got error: %v", k, err)
-	}
-	var inUseErr *controller.VolumeInUseError
-	if errors.As(err, &inUseErr) != tc.expectInUseErr {
-		t.Errorf("test %q: expected VolumeInUseError=%v, got error: %v", k, tc.expectInUseErr, err)
 	}
 }
 
@@ -6991,22 +6891,13 @@ func TestProvisionFromPVC(t *testing.T) {
 			}
 
 			if tc.volOpts.PVC.Spec.DataSourceRef != nil || tc.volOpts.PVC.Spec.DataSource != nil {
-				// Provision updates the API object synchronously, but informer delivery is
-				// asynchronous. Assert the write without racing the claimLister cache.
-				sourceNamespace, sourceName := tc.volOpts.PVC.Namespace, ""
+				var claim *v1.PersistentVolumeClaim
 				if tc.volOpts.PVC.Spec.DataSourceRef != nil {
-					sourceName = tc.volOpts.PVC.Spec.DataSourceRef.Name
-					if tc.volOpts.PVC.Spec.DataSourceRef.Namespace != nil {
-						sourceNamespace = *tc.volOpts.PVC.Spec.DataSourceRef.Namespace
-					}
+					claim, _ = claimLister.PersistentVolumeClaims(tc.volOpts.PVC.Namespace).Get(tc.volOpts.PVC.Spec.DataSourceRef.Name)
 				} else if tc.volOpts.PVC.Spec.DataSource != nil {
-					sourceName = tc.volOpts.PVC.Spec.DataSource.Name
+					claim, _ = claimLister.PersistentVolumeClaims(tc.volOpts.PVC.Namespace).Get(tc.volOpts.PVC.Spec.DataSource.Name)
 				}
-				claim, claimErr := clientSet.CoreV1().PersistentVolumeClaims(sourceNamespace).Get(context.Background(), sourceName, metav1.GetOptions{})
-				if claimErr != nil && tc.expectFinalizers {
-					t.Errorf("Get clone source PVC %s/%s: %v", sourceNamespace, sourceName, claimErr)
-				}
-				if claimErr == nil {
+				if claim != nil {
 					set := checkFinalizer(claim, pvcCloneFinalizer)
 					if tc.expectFinalizers && !set {
 						t.Errorf("Claim %s does not have clone protection finalizer set", claim.Name)

@@ -17,7 +17,7 @@ type OpenChannelError struct {
 }
 
 func (e *OpenChannelError) Error() string {
-	return fmt.Sprintf("ssh: rejected: %s (%q)", e.Reason, e.Message)
+	return fmt.Sprintf("ssh: rejected: %s (%s)", e.Reason, e.Message)
 }
 
 // ConnMetadata holds metadata for the connection.
@@ -75,11 +75,7 @@ type Conn interface {
 }
 
 // AlgorithmsConnMetadata is a ConnMetadata that can return the algorithms
-// negotiated between client and server in the last completed key exchange.
-// The ConnMetadata passed to the ServerConfig callbacks implements it, as do
-// the Conn returned by NewClientConn and the Conn embedded in Client and
-// ServerConn. For a Conn returned by NewControlClientConn, Algorithms returns
-// the zero value.
+// negotiated between client and server.
 type AlgorithmsConnMetadata interface {
 	ConnMetadata
 	Algorithms() NegotiatedAlgorithms
@@ -95,17 +91,9 @@ func DiscardRequests(in <-chan *Request) {
 	}
 }
 
-// A connTransport represents the transport for a connection.
-type connTransport interface {
-	packetConn
-	getAlgorithms() NegotiatedAlgorithms
-	getSessionID() []byte
-	waitSession() error
-}
-
 // A connection represents an incoming connection.
 type connection struct {
-	transport connTransport
+	transport *handshakeTransport
 	sshConn
 
 	// The connection protocol.
@@ -125,6 +113,7 @@ type sshConn struct {
 	sessionID     []byte
 	clientVersion []byte
 	serverVersion []byte
+	algorithms    NegotiatedAlgorithms
 }
 
 func dup(src []byte) []byte {
@@ -161,6 +150,6 @@ func (c *sshConn) ServerVersion() []byte {
 	return dup(c.serverVersion)
 }
 
-func (c *connection) Algorithms() NegotiatedAlgorithms {
-	return c.transport.getAlgorithms()
+func (c *sshConn) Algorithms() NegotiatedAlgorithms {
+	return c.algorithms
 }
