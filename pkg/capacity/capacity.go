@@ -40,7 +40,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	storageinformersv1 "k8s.io/client-go/informers/storage/v1"
-	storagev1typed "k8s.io/client-go/kubernetes/typed/storage/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/component-base/metrics"
@@ -81,7 +80,7 @@ type Controller struct {
 
 	csiController    CSICapacityClient
 	driverName       string
-	storageClient    storagev1typed.CSIStorageCapacitiesGetter
+	clientFactory    CSIStorageCapacityFactory
 	queue            workqueue.TypedRateLimitingInterface[QueueKey]
 	owner            *metav1.OwnerReference
 	managedByID      string
@@ -148,13 +147,25 @@ type CSICapacityClient interface {
 	GetCapacity(ctx context.Context, in *csi.GetCapacityRequest, opts ...grpc.CallOption) (*csi.GetCapacityResponse, error)
 }
 
+// CSIStorageCapacityInterface is a subset of the client-go interface for
+// v1.CSIStorageCapacity.
+type CSIStorageCapacityInterface interface {
+	Create(ctx context.Context, cSIStorageCapacity *storagev1.CSIStorageCapacity, opts metav1.CreateOptions) (*storagev1.CSIStorageCapacity, error)
+	Update(ctx context.Context, cSIStorageCapacity *storagev1.CSIStorageCapacity, opts metav1.UpdateOptions) (*storagev1.CSIStorageCapacity, error)
+	Delete(ctx context.Context, name string, opts metav1.DeleteOptions) error
+}
+
+// CSIStorageCapacityFactory corresponds to StorageV1().CSIStorageCapacities but returns
+// just what we need.
+type CSIStorageCapacityFactory func(namespace string) CSIStorageCapacityInterface
+
 // NewController creates a new controller for CSIStorageCapacity objects.
 // It implements metrics.StableCollector and thus can be registered in
 // a registry.
 func NewCentralCapacityController(
 	csiController CSICapacityClient,
 	driverName string,
-	storageClient storagev1typed.CSIStorageCapacitiesGetter,
+	clientFactory CSIStorageCapacityFactory,
 	queue workqueue.TypedRateLimitingInterface[QueueKey],
 	owner *metav1.OwnerReference,
 	managedByID string,
@@ -169,7 +180,7 @@ func NewCentralCapacityController(
 	c := &Controller{
 		csiController:    csiController,
 		driverName:       driverName,
-		storageClient:    storageClient,
+		clientFactory:    clientFactory,
 		queue:            queue,
 		owner:            owner,
 		managedByID:      managedByID,
@@ -634,7 +645,7 @@ func (c *Controller) syncCapacity(ctx context.Context, item WorkItem) error {
 		}
 		var err error
 		klog.V(5).Infof("Capacity Controller: creating new object for %+v, new capacity %v", item, quantity)
-		capacity, err = c.storageClient.CSIStorageCapacities(c.ownerNamespace).Create(ctx, capacity, metav1.CreateOptions{})
+		capacity, err = c.clientFactory(c.ownerNamespace).Create(ctx, capacity, metav1.CreateOptions{})
 		if err != nil {
 			return fmt.Errorf("create CSIStorageCapacity for %+v: %v", item, err)
 		}
@@ -658,7 +669,7 @@ func (c *Controller) syncCapacity(ctx context.Context, item WorkItem) error {
 		}
 		var err error
 		klog.V(5).Infof("Capacity Controller: updating %s for %+v, new capacity %v, new maximumVolumeSize %v", capacity.Name, item, quantity, maximumVolumeSize)
-		capacity, err = c.storageClient.CSIStorageCapacities(capacity.Namespace).Update(ctx, capacity, metav1.UpdateOptions{})
+		capacity, err = c.clientFactory(capacity.Namespace).Update(ctx, capacity, metav1.UpdateOptions{})
 		if err != nil {
 			return fmt.Errorf("update CSIStorageCapacity for %+v: %v", item, err)
 		}
@@ -673,7 +684,7 @@ func (c *Controller) syncCapacity(ctx context.Context, item WorkItem) error {
 // deleteCapacity ensures that the object is gone when done.
 func (c *Controller) deleteCapacity(ctx context.Context, capacity *storagev1.CSIStorageCapacity) error {
 	klog.V(5).Infof("Capacity Controller: removing CSIStorageCapacity %s", capacity.Name)
-	err := c.storageClient.CSIStorageCapacities(capacity.Namespace).Delete(ctx, capacity.Name, metav1.DeleteOptions{})
+	err := c.clientFactory(capacity.Namespace).Delete(ctx, capacity.Name, metav1.DeleteOptions{})
 	if err != nil && apierrs.IsNotFound(err) {
 		return nil
 	}
