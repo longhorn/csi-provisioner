@@ -890,10 +890,8 @@ func defaultEnforceMode() int {
 	return Disabled
 }
 
-// mcsAdd reserves a level. If the argument is empty or does not contain
-// MCS/MLS category component (no ":c"), it is ignored.
 func mcsAdd(mcs string) error {
-	if !strings.Contains(mcs, ":c") {
+	if mcs == "" {
 		return nil
 	}
 	state.Lock()
