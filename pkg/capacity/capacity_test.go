@@ -1343,7 +1343,7 @@ func fakeController(ctx context.Context, client *fakeclientset.Clientset, owner 
 	c := NewCentralCapacityController(
 		storage,
 		driverName,
-		client.StorageV1(),
+		NewV1ClientFactory(client),
 		queue,
 		owner,
 		managedByID,
