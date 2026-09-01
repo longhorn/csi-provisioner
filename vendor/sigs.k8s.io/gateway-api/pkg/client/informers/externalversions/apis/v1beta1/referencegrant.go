@@ -24,7 +24,6 @@ import (
 
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
-	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	watch "k8s.io/apimachinery/pkg/watch"
 	cache "k8s.io/client-go/tools/cache"
 	gatewayapiapisv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
@@ -50,61 +49,48 @@ type referenceGrantInformer struct {
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
 func NewReferenceGrantInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
-	return NewReferenceGrantInformerWithOptions(client, namespace, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: indexers})
+	return NewFilteredReferenceGrantInformer(client, namespace, resyncPeriod, indexers, nil)
 }
 
 // NewFilteredReferenceGrantInformer constructs a new informer for ReferenceGrant type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
 func NewFilteredReferenceGrantInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
-	return NewReferenceGrantInformerWithOptions(client, namespace, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: indexers, TweakListOptions: tweakListOptions})
-}
-
-// NewReferenceGrantInformerWithOptions constructs a new informer for ReferenceGrant type with additional options.
-// Always prefer using an informer factory to get a shared informer instead of getting an independent
-// one. This reduces memory footprint and number of connections to the server.
-func NewReferenceGrantInformerWithOptions(client versioned.Interface, namespace string, options internalinterfaces.InformerOptions) cache.SharedIndexInformer {
-	gvr := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1beta1", Resource: "referencegrants"}
-	identifier := options.InformerName.WithResource(gvr)
-	tweakListOptions := options.TweakListOptions
-	return cache.NewSharedIndexInformerWithOptions(
+	return cache.NewSharedIndexInformer(
 		cache.ToListWatcherWithWatchListSemantics(&cache.ListWatch{
-			ListFunc: func(opts v1.ListOptions) (runtime.Object, error) {
+			ListFunc: func(options v1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
-					tweakListOptions(&opts)
+					tweakListOptions(&options)
 				}
-				return client.GatewayV1beta1().ReferenceGrants(namespace).List(context.Background(), opts)
+				return client.GatewayV1beta1().ReferenceGrants(namespace).List(context.Background(), options)
 			},
-			WatchFunc: func(opts v1.ListOptions) (watch.Interface, error) {
+			WatchFunc: func(options v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
-					tweakListOptions(&opts)
+					tweakListOptions(&options)
 				}
-				return client.GatewayV1beta1().ReferenceGrants(namespace).Watch(context.Background(), opts)
+				return client.GatewayV1beta1().ReferenceGrants(namespace).Watch(context.Background(), options)
 			},
-			ListWithContextFunc: func(ctx context.Context, opts v1.ListOptions) (runtime.Object, error) {
+			ListWithContextFunc: func(ctx context.Context, options v1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
-					tweakListOptions(&opts)
+					tweakListOptions(&options)
 				}
-				return client.GatewayV1beta1().ReferenceGrants(namespace).List(ctx, opts)
+				return client.GatewayV1beta1().ReferenceGrants(namespace).List(ctx, options)
 			},
-			WatchFuncWithContext: func(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
+			WatchFuncWithContext: func(ctx context.Context, options v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
-					tweakListOptions(&opts)
+					tweakListOptions(&options)
 				}
-				return client.GatewayV1beta1().ReferenceGrants(namespace).Watch(ctx, opts)
+				return client.GatewayV1beta1().ReferenceGrants(namespace).Watch(ctx, options)
 			},
 		}, client),
 		&gatewayapiapisv1beta1.ReferenceGrant{},
-		cache.SharedIndexInformerOptions{
-			ResyncPeriod: options.ResyncPeriod,
-			Indexers:     options.Indexers,
-			Identifier:   identifier,
-		},
+		resyncPeriod,
+		indexers,
 	)
 }
 
 func (f *referenceGrantInformer) defaultInformer(client versioned.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
-	return NewReferenceGrantInformerWithOptions(client, f.namespace, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, InformerName: f.factory.InformerName(), TweakListOptions: f.tweakListOptions})
+	return NewFilteredReferenceGrantInformer(client, f.namespace, resyncPeriod, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, f.tweakListOptions)
 }
 
 func (f *referenceGrantInformer) Informer() cache.SharedIndexInformer {
